@@ -1,12 +1,16 @@
+import json
+import os
+import time
 from youtube_transcript_api import YouTubeTranscriptApi
 import openai
 from yt_dlp import YoutubeDL
-import pandas as pd
+from summary import summarizeHealthcare
 import logging
+import pickle
 
 import re
 
-openai.api_key = ''
+openai.api_key = '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'
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +32,7 @@ def get_completion(prompt, model="gpt-3.5-turbo"):
 def extract_entries_for_url(channel_url):
     list_dict = []
     entries = ydl_get_entries(channel_url)
+    # entries = pickle.load(open("videos.pickle", "rb"))
     # workaround if channel videos are seen as a playlist
     if "_type" in entries[0]:
         if entries[0]["_type"] == "playlist":
@@ -39,11 +44,12 @@ def extract_entries_for_url(channel_url):
             timecodes = parse_timecodes(entry.get("description", ""))
             subs = ""
             # subs can be empty and get_transcript fails if it's so
-            if entry["subtitles"] & entry["subtitles"]["en"]:
+            if ("subtitles" in entry.keys()) & ("en" in entry["subtitles"].keys()):
                 subs = get_transcript(entry.get("id", ""))
 
             list_dict.append(
                 {
+                    "id": entry.get("id", ""),
                     "author": entry.get("uploader", ""),
                     "channel_url": entry.get("uploader_url", ""),
                     "title": entry.get("title", ""),
@@ -75,7 +81,7 @@ def ydl_get_entries(search_term):
     try:
         ydl_opts = {"logger": MyLogger(), "ignoreerrors": True}
         with YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(search_term, download=False)
+            info_dict = ydl.extract_info(search_term, download=False, process=False)
         return info_dict["entries"]
     except Exception as e:
         logger.error("Error with getting the youtube url for %s : %s.", search_term, e)
@@ -84,24 +90,30 @@ def ydl_get_entries(search_term):
 
 class MyLogger(object):
     def debug(self, msg):
-        pass
+        print(msg)
 
     def warning(self, msg):
-        pass
+        print(msg)
 
     def error(self, msg):
         print(msg)
 
 
 if __name__ == '__main__':
-    transcript = get_transcript('XcvhERcZpWw')
-    #print(transcript)
-
-    prompt = f'Rewrite the text in quotes as a transcript of kids show, make as many jokes as possible "{transcript[:1000]}"'
-    #print(get_completion(prompt))
 
     # huberman channel url
     entries = extract_entries_for_url('https://www.youtube.com/channel/UC2D2CMWXMOVWx7giW1n3LIg')
+    entries = [video for video in entries if video['subs']]
+    # entries = pickle.load(open("subs.pickle", "rb"))
+    for video in entries:
+        filename = video['id'] + '.json'
+        if not os.path.isfile(filename):
+            summary = summarizeHealthcare(video['subs'])
+            summary['sourceUrl'] = video['webpage_url']
+            summary['title'] = video['title']
+            with open(filename, 'w') as f:
+                json.dump(summary, f)
+            print('processed ' + video['id'])
+            time.sleep(15)  # cohere allows 5 requests per minute
+
     export_filename = 'youtube_export_with_subs'
-    df = pd.DataFrame(entries)
-    df.to_csv(export_filename + ".csv", index=False, sep=";")
